@@ -90,7 +90,7 @@ fn get_shape(nums: &[usize]) -> (usize, usize, usize, usize) {
     (hmin, hmax, vmin, vmax)
 }
 
-fn nums_to_bits(nums: &[usize]) -> u16 {
+fn nums_to_bits(nums: impl Iterator<Item = usize>) -> u16 {
     let mut bits = 0;
     for n in nums {
         bits |= 1_u16 << n;
@@ -158,6 +158,7 @@ fn pack_lose2(pool: &mut BoardSet, bits: u16, both_is_win: bool) {
         }
     }
 
+    let lose2 = BoardValue::lose(2).unwrap();
     let judgement = if both_is_win {
         Judge::LastWins
     } else {
@@ -183,7 +184,7 @@ fn pack_lose2(pool: &mut BoardSet, bits: u16, both_is_win: bool) {
             }
             let board = BoardBuilder::from_u16_bits(positions).build_unchecked();
             if first_check {
-                if boss_may_die(&board, Color::Red, rule) {
+                if boss_may_die(&board, Color::Red) {
                     first_check = false;
                 } else {
                     break;
@@ -191,7 +192,7 @@ fn pack_lose2(pool: &mut BoardSet, bits: u16, both_is_win: bool) {
             }
 
             if matches!(
-                compare_board_value(board, BoardValue::lose(2).unwrap(), Color::Red, rule),
+                compare_board_value(board, lose2, Color::Red, rule),
                 Ok(std::cmp::Ordering::Equal)
             ) {
                 pool.raw_mut().insert(board.to_invariant_u64(Color::Red));
@@ -200,8 +201,8 @@ fn pack_lose2(pool: &mut BoardSet, bits: u16, both_is_win: bool) {
     }
 }
 
-fn boss_may_die(board: &Board, player: Color, rule: GameRule) -> bool {
-    for action in board.legal_actions(player, true, true, *rule.is_remove_accepted()) {
+fn boss_may_die(board: &Board, player: Color) -> bool {
+    for action in board.legal_actions(player, false, true, false) {
         if !matches!(action, Action::Move(_, Dove::B, _)) {
             continue;
         }
@@ -220,12 +221,10 @@ fn get_canonical_bits(nums: &[usize]) -> u16 {
     let (hsize, vsize) = (hmax - hmin + 1, vmax - vmin + 1);
 
     let mapper = PositionMapper::try_create(vsize, hsize).unwrap();
-    let mut bits = u16::MAX;
-    for idx in 0..8 {
-        let congruent: Vec<usize> = aligned.iter().map(|n| mapper.map(idx, *n)).collect();
-        bits = bits.min(nums_to_bits(&congruent[..]));
-    }
-    bits
+    (0..8)
+        .map(|idx| nums_to_bits(aligned.iter().map(|n| mapper.map(idx, *n))))
+        .min()
+        .unwrap()
 }
 
 fn find_all_bits(num_doves: usize) -> HashSet<u16> {
