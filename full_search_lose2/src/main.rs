@@ -100,7 +100,7 @@ fn pack_lose2(pool: &mut BoardSet, bits: u16, rule: GameRule) {
         let positions_base = [[rb, 0, 0, 0, 0, 0], [gb, 0, 0, 0, 0, 0]];
         let others: Vec<u16> = HotBitIter::new(bits & !(rb | gb)).collect();
 
-        let mut first_check = true;
+        let mut needs_to_check_necessary_condition = true;
         for cd in iproduct!(Color::iter(), Dove::iter().skip(1)).permutations(num_res) {
             let mut positions = positions_base;
             for ((c, d), &pos) in cd.into_iter().zip(others.iter()) {
@@ -110,9 +110,9 @@ fn pack_lose2(pool: &mut BoardSet, bits: u16, rule: GameRule) {
             }
 
             let board = BoardBuilder::from_u16_bits(positions).build_unchecked();
-            if first_check {
+            if needs_to_check_necessary_condition {
                 if boss_may_die(&board, Color::Red) {
-                    first_check = false;
+                    needs_to_check_necessary_condition = false;
                 } else {
                     break;
                 }
@@ -129,7 +129,7 @@ fn pack_lose2(pool: &mut BoardSet, bits: u16, rule: GameRule) {
 }
 
 fn get_canonical_bits(nums: &[usize]) -> u16 {
-    fn _get_shape(nums: &[usize]) -> (usize, usize, usize, usize) {
+    fn _calc_rectangle(nums: &[usize]) -> (usize, usize, usize, usize) {
         let (mut hmin, mut hmax, mut vmin, mut vmax) = (3, 0, 3, 0);
         for n in nums {
             let (h, v) = (n % 4, n / 4);
@@ -141,7 +141,7 @@ fn get_canonical_bits(nums: &[usize]) -> u16 {
         (hmin, hmax, vmin, vmax)
     }
 
-    let (hmin, hmax, vmin, vmax) = _get_shape(nums);
+    let (hmin, hmax, vmin, vmax) = _calc_rectangle(nums);
     let idx_shift = hmin + 4 * vmin;
     let aligned: Vec<usize> = nums.iter().map(|n| n - idx_shift).collect();
     let (hsize, vsize) = (hmax - hmin + 1, vmax - vmin + 1);
@@ -186,7 +186,10 @@ fn find_all_bits(num_doves: usize) -> HashSet<u16> {
 }
 
 fn find_all_lose2(num_doves: usize, rule: GameRule, num_thread: usize) -> BoardSet {
-    println!("[Thread Main] #doves={}, #cores={}", num_doves, num_thread);
+    println!(
+        "[Thread Main] #doves={}, #threads={}",
+        num_doves, num_thread
+    );
 
     let all_bits = Arc::new(find_all_bits(num_doves).into_iter().collect_vec());
     let len_pack = (all_bits.len() + num_thread - 1) / num_thread;
@@ -198,7 +201,7 @@ fn find_all_lose2(num_doves: usize, rule: GameRule, num_thread: usize) -> BoardS
             let mut pool = BoardSet::new();
             let begin = all_bits.len().min(i * len_pack);
             let end = all_bits.len().min((i + 1) * len_pack);
-            let num_total = end - begin + 1;
+            let num_total = end - begin;
 
             println!("[Thread {i}] started! Total={num_total}");
 
