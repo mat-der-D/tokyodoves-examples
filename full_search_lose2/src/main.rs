@@ -1,32 +1,10 @@
-use itertools::{self, Itertools};
+use itertools::{self, iproduct, Itertools};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread;
+use tokyodoves::strum::IntoEnumIterator;
 use tokyodoves::{analysis::*, collections::*, game::*, *};
 
-// ****************************************************************
-//  Constants
-// ****************************************************************
-const NOT_BOSS: [(Color, Dove); 10] = {
-    use Color::*;
-    use Dove::*;
-    [
-        (Red, A),
-        (Red, Y),
-        (Red, M),
-        (Red, T),
-        (Red, H),
-        (Green, A),
-        (Green, Y),
-        (Green, M),
-        (Green, T),
-        (Green, H),
-    ]
-};
-
-// ****************************************************************
-//  Bit Utility
-// ****************************************************************
 struct HotBitIter<T> {
     bits: T,
 }
@@ -37,68 +15,20 @@ impl<T> HotBitIter<T> {
     }
 }
 
-macro_rules! impl_iterator {
-    ($($ty:ty),*) => {
-        $(
-        impl Iterator for HotBitIter<$ty> {
-            type Item = $ty;
-            fn next(&mut self) -> Option<Self::Item> {
-                if self.bits != 0 {
-                    let unit = 1 << self.bits.trailing_zeros();
-                    self.bits &= !unit;
-                    Some(unit)
-                } else {
-                    None
-                }
-            }
+impl Iterator for HotBitIter<u16> {
+    type Item = u16;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.bits != 0 {
+            let unit = 1 << self.bits.trailing_zeros();
+            self.bits &= !unit;
+            Some(unit)
+        } else {
+            None
         }
-        )*
-    };
-}
-
-impl_iterator!(u16);
-
-fn calc_adjacents(bits: u16) -> u16 {
-    let r = 0xeeee;
-    let l = 0x7777;
-    let mut adj = 0;
-    adj |= (bits & r) >> 5;
-    adj |= bits >> 4;
-    adj |= (bits & l) >> 3;
-    adj |= (bits & r) >> 1;
-    adj |= (bits & l) << 1;
-    adj |= (bits & r) << 3;
-    adj |= bits << 4;
-    adj |= (bits & l) << 5;
-    adj
-}
-
-fn is_isolated(bits: u16) -> bool {
-    let adj = calc_adjacents(bits);
-    bits & adj != bits
-}
-
-fn get_shape(nums: &[usize]) -> (usize, usize, usize, usize) {
-    let (mut hmin, mut hmax, mut vmin, mut vmax) = (3, 0, 3, 0);
-    for n in nums {
-        let (x, y) = (n % 4, n / 4);
-        hmin = hmin.min(x);
-        hmax = hmax.max(x);
-        vmin = vmin.min(y);
-        vmax = vmax.max(y);
     }
-    (hmin, hmax, vmin, vmax)
 }
 
-fn nums_to_bits(nums: impl Iterator<Item = usize>) -> u16 {
-    let mut bits = 0;
-    for n in nums {
-        bits |= 1_u16 << n;
-    }
-    bits
-}
-
-fn decompose(bits: u16) -> (u16, u16) {
+fn decompose_surrounded(bits: u16) -> (u16, u16) {
     let edge_e = 0x1111;
     let edge_w = 0x8888;
     let edge_n = 0xf000;
@@ -106,82 +36,79 @@ fn decompose(bits: u16) -> (u16, u16) {
     let is_wall_ew = (bits & edge_e) != 0 && (bits & edge_w) != 0;
     let is_wall_ns = (bits & edge_n) != 0 && (bits & edge_s) != 0;
 
-    let bits_e = {
-        let mut b = (bits & !edge_e) >> 1;
-        if is_wall_ew {
-            b |= edge_w;
-        }
-        b
-    };
-    let bits_w = {
-        let mut b = (bits & !edge_w) << 1;
-        if is_wall_ew {
-            b |= edge_e;
-        }
-        b
-    };
-    let bits_n = {
-        let mut b = (bits & !edge_n) << 4;
-        if is_wall_ns {
-            b |= edge_s;
-        }
-        b
-    };
-    let bits_s = {
-        let mut b = (bits & !edge_s) >> 4;
-        if is_wall_ns {
-            b |= edge_n;
-        }
-        b
-    };
+    macro_rules! shift {
+        ($edge:expr, $is_wall:expr, $rot:ident, $rot_num:expr) => {{
+            if $is_wall {
+                bits | $edge
+            } else {
+                bits & !$edge
+            }
+            .$rot($rot_num)
+        }};
+    }
+
+    let bits_e = shift!(edge_e, is_wall_ew, rotate_right, 1);
+    let bits_w = shift!(edge_w, is_wall_ew, rotate_left, 1);
+    let bits_n = shift!(edge_n, is_wall_ns, rotate_left, 4);
+    let bits_s = shift!(edge_s, is_wall_ns, rotate_right, 4);
+
     let surrounded = bits & bits_n & bits_e & bits_w & bits_s;
     let not_surrounded = bits & !surrounded;
     (surrounded, not_surrounded)
 }
 
-fn pack_lose2(pool: &mut BoardSet, bits: u16, both_is_win: bool) {
+fn boss_may_die(board: &Board, player: Color) -> bool {
+    for action in board.legal_actions(player, false, true, false) {
+        if !matches!(action, Action::Move(_, Dove::B, _)) {
+            continue;
+        }
+        let b = board.perform_unchecked_copied(action);
+        if b.liberty_of_boss(player) >= 2 {
+            return false;
+        }
+    }
+    true
+}
+
+fn pack_lose2(pool: &mut BoardSet, bits: u16, rule: GameRule) {
     fn _color_to_index(color: Color) -> usize {
+        use Color::*;
         match color {
-            Color::Red => 0,
-            Color::Green => 1,
+            Red => 0,
+            Green => 1,
         }
     }
 
     fn _dove_to_index(dove: Dove) -> usize {
+        use Dove::*;
         match dove {
-            Dove::B => 0,
-            Dove::A => 1,
-            Dove::Y => 2,
-            Dove::M => 3,
-            Dove::T => 4,
-            Dove::H => 5,
+            B => 0,
+            A => 1,
+            Y => 2,
+            M => 3,
+            T => 4,
+            H => 5,
         }
     }
 
     let lose2 = BoardValue::lose(2).unwrap();
-    let judgement = if both_is_win {
-        Judge::LastWins
-    } else {
-        Judge::NextWins
-    };
-    let rule = GameRule::new(true).with_suicide_atk_judge(judgement);
-
-    let (_, not_surrounded) = decompose(bits);
+    let (_, not_surrounded) = decompose_surrounded(bits);
     let num_res = bits.count_ones() as usize - 2;
     for bosses in HotBitIter::new(not_surrounded).permutations(2) {
         let rb = bosses[0];
         let gb = bosses[1];
-        let positions = [[rb, 0, 0, 0, 0, 0], [gb, 0, 0, 0, 0, 0]];
-        let others = HotBitIter::new(bits & !(rb | gb)).collect_vec();
+        let positions_base = [[rb, 0, 0, 0, 0, 0], [gb, 0, 0, 0, 0, 0]];
+        let others: Vec<u16> = HotBitIter::new(bits & !(rb | gb)).collect();
 
         let mut first_check = true;
-        for cd in NOT_BOSS.into_iter().permutations(num_res) {
-            let mut positions = positions;
+        for cd in iproduct!(Color::iter(), Dove::iter().skip(1)).permutations(num_res) {
+            let mut positions = positions_base;
             for ((c, d), &pos) in cd.into_iter().zip(others.iter()) {
                 let ic = _color_to_index(c);
                 let id = _dove_to_index(d);
                 positions[ic][id] = pos;
             }
+
             let board = BoardBuilder::from_u16_bits(positions).build_unchecked();
             if first_check {
                 if boss_may_die(&board, Color::Red) {
@@ -201,37 +128,56 @@ fn pack_lose2(pool: &mut BoardSet, bits: u16, both_is_win: bool) {
     }
 }
 
-fn boss_may_die(board: &Board, player: Color) -> bool {
-    for action in board.legal_actions(player, false, true, false) {
-        if !matches!(action, Action::Move(_, Dove::B, _)) {
-            continue;
-        }
-        let b = board.perform_unchecked_copied(action);
-        if b.liberty_of_boss(player) >= 2 {
-            return false;
-        }
-    }
-    true
-}
-
 fn get_canonical_bits(nums: &[usize]) -> u16 {
-    let (hmin, hmax, vmin, vmax) = get_shape(nums);
+    fn _get_shape(nums: &[usize]) -> (usize, usize, usize, usize) {
+        let (mut hmin, mut hmax, mut vmin, mut vmax) = (3, 0, 3, 0);
+        for n in nums {
+            let (h, v) = (n % 4, n / 4);
+            hmin = hmin.min(h);
+            hmax = hmax.max(h);
+            vmin = vmin.min(v);
+            vmax = vmax.max(v);
+        }
+        (hmin, hmax, vmin, vmax)
+    }
+
+    let (hmin, hmax, vmin, vmax) = _get_shape(nums);
     let idx_shift = hmin + 4 * vmin;
     let aligned: Vec<usize> = nums.iter().map(|n| n - idx_shift).collect();
     let (hsize, vsize) = (hmax - hmin + 1, vmax - vmin + 1);
 
+    fn _nums_to_bits(nums: impl Iterator<Item = usize>) -> u16 {
+        let mut bits = 0;
+        for n in nums {
+            bits |= 1_u16 << n;
+        }
+        bits
+    }
+
     let mapper = PositionMapper::try_create(vsize, hsize).unwrap();
     (0..8)
-        .map(|idx| nums_to_bits(aligned.iter().map(|n| mapper.map(idx, *n))))
+        .map(|idx| _nums_to_bits(aligned.iter().map(|n| mapper.map(idx, *n))))
         .min()
         .unwrap()
 }
 
 fn find_all_bits(num_doves: usize) -> HashSet<u16> {
+    fn _calc_adjacents(bits: u16) -> u16 {
+        let mut adj = (bits << 4) | (bits >> 4);
+        let center = adj | bits;
+        adj |= (center & 0xeeee) >> 1;
+        adj |= (center & 0x7777) << 1;
+        adj
+    }
+
+    fn _is_isolated(bits: u16) -> bool {
+        bits & _calc_adjacents(bits) != bits
+    }
+
     let mut all_bits = HashSet::new();
     for v_idx in (0..16).combinations(num_doves) {
         let bits = get_canonical_bits(&v_idx);
-        if is_isolated(bits) {
+        if _is_isolated(bits) {
             continue;
         }
         all_bits.insert(bits);
@@ -239,14 +185,14 @@ fn find_all_bits(num_doves: usize) -> HashSet<u16> {
     all_bits
 }
 
-fn find_all_lose2(num_doves: usize, both_is_win: bool, num_cores: usize) -> BoardSet {
-    println!("[Thread Main] #doves={}, #cores={}", num_doves, num_cores);
+fn find_all_lose2(num_doves: usize, rule: GameRule, num_thread: usize) -> BoardSet {
+    println!("[Thread Main] #doves={}, #cores={}", num_doves, num_thread);
 
     let all_bits = Arc::new(find_all_bits(num_doves).into_iter().collect_vec());
-    let len_pack = (all_bits.len() + num_cores - 1) / num_cores;
+    let len_pack = (all_bits.len() + num_thread - 1) / num_thread;
 
-    let mut handlers = Vec::with_capacity(num_cores);
-    for i in 0..num_cores {
+    let mut handlers = Vec::with_capacity(num_thread);
+    for i in 0..num_thread {
         let all_bits = Arc::clone(&all_bits);
         handlers.push(thread::spawn(move || {
             let mut pool = BoardSet::new();
@@ -257,41 +203,38 @@ fn find_all_lose2(num_doves: usize, both_is_win: bool, num_cores: usize) -> Boar
             println!("[Thread {i}] started! Total={num_total}");
 
             for (count, bits) in all_bits[begin..end].iter().enumerate() {
-                if (count + 1) % 10 == 0 {
+                pack_lose2(&mut pool, *bits, rule);
+                if (count + 1) % 10 == 0 || count + 1 == num_total {
                     println!(
                         "[Thread {i}] {} from {num_total} ({}%)",
                         count + 1,
                         ((count + 1) as f32) / (num_total as f32) * 100_f32
                     );
                 }
-                pack_lose2(&mut pool, *bits, both_is_win);
             }
             println!("[Thread {i}] finished!");
             pool
         }))
     }
 
-    let results = handlers
-        .into_iter()
-        .map(|x| x.join().unwrap())
-        .collect_vec();
+    let results: Vec<BoardSet> = handlers.into_iter().map(|x| x.join().unwrap()).collect();
 
     let mut capacity = Capacity::new();
     for set in results.iter() {
         capacity += set.capacity();
     }
 
-    let mut lose2 = BoardSet::with_capacity(capacity);
+    let mut lose2_set = BoardSet::with_capacity(capacity);
     for result in results {
-        lose2.absorb(result);
+        lose2_set.absorb(result);
     }
     println!("[Thread Main] Concatenated");
-    println!("Total={}", lose2.len());
-    lose2
+    println!("Total={}", lose2_set.len());
+    lose2_set
 }
 
 // ****************************************************************
-//  Building Blocks
+//  Main
 // ****************************************************************
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -299,16 +242,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         panic!("give more than 3 arguments");
     }
     let num_doves: usize = args[1].parse()?;
-    let num_cores: usize = args[2].parse()?;
+    let num_thread: usize = args[2].parse()?;
     let path = std::path::Path::new(args[3].as_str());
-    let both_is_win = false;
+    let rule = GameRule::new(true);
 
     let fs = std::fs::File::create(path)?;
 
-    let lose2 = find_all_lose2(num_doves, both_is_win, num_cores);
+    let lose2_set = find_all_lose2(num_doves, rule, num_thread);
 
     // *** SAVE ***
-    lose2.save(fs)?;
+    lose2_set.save(fs)?;
     println!("Saved to {:?}", path);
     Ok(())
 }
