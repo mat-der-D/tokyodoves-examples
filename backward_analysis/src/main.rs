@@ -99,7 +99,7 @@ where
 
     // --- Trim ---
     for num_doves in 2..=12 {
-        let src_dir = dove_dir(factory.trimmed_simply(num_to), num_doves);
+        let src_dir = dove_dir(factory.redistributed(num_to), num_doves);
         let dst_dir = dove_dir(factory.trimmed_simply(num_to), num_doves);
         std::fs::create_dir_all(&dst_dir)?;
         let win_paths = factory.win_paths(num_from, num_doves);
