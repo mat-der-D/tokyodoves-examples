@@ -11,4 +11,5 @@ codegen-units = 1
 
 [dependencies]
 anyhow = "1.0.72"
-tokyodoves = "0.1.6"
+# tokyodoves = "0.1.7"
+tokyodoves = { "path" = "C:\\Users\\t_ish\\Documents\\dev\\github\\tokyodoves" }

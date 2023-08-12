@@ -5,6 +5,12 @@ pub struct OnOff {
     onoff: u64,
 }
 
+impl std::fmt::Display for OnOff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "OnOff({:0>12b})", self.onoff >> 48)
+    }
+}
+
 impl OnOff {
     pub const FULL: OnOff = OnOff { onoff: 0xfff << 48 };
 
