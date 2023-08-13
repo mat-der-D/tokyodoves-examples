@@ -31,7 +31,7 @@ pub fn make_target_filter_10(win_onoff: OnOff) -> impl Fn(&u64) -> bool {
 }
 
 pub fn make_action_filter_10(num_from: usize, num_to: usize) -> impl Fn(&Action, &u64) -> bool {
-    move |action, _| -> bool {
+    move |action, _| {
         use Action::*;
         match action {
             Put(..) => num_from > num_to,
@@ -43,11 +43,11 @@ pub fn make_action_filter_10(num_from: usize, num_to: usize) -> impl Fn(&Action,
 
 // --- 11 ---
 pub fn make_win_filter_11(win_onoff: OnOff) -> impl Fn(&u64) -> bool {
-    move |hash: &u64| -> bool { OnOff::new(*hash) == win_onoff }
+    move |hash| OnOff::new(*hash) == win_onoff
 }
 
 pub fn make_target_filter_11(win_onoff: OnOff) -> impl Fn(&u64) -> bool {
-    move |hash: &u64| -> bool { OnOff::new(*hash) == !win_onoff }
+    move |hash| OnOff::new(*hash) == !win_onoff
 }
 
 pub fn make_action_filter_11(win_onoff: OnOff) -> impl Fn(&Action, &u64) -> bool {
@@ -58,16 +58,16 @@ pub fn make_action_filter_11(win_onoff: OnOff) -> impl Fn(&Action, &u64) -> bool
 }
 
 // --- 12 ---
-pub fn make_target_filter_12(dist: u64) -> impl Fn(&u64) -> bool {
-    move |hash: &u64| -> bool { aniki_boss_distance(*hash, Color::Green) == dist }
+pub fn make_win_filter_12(dist: u64) -> impl Fn(&u64) -> bool {
+    move |hash| aniki_boss_distance(*hash, Color::Red) == dist
 }
 
-pub fn make_win_filter_12(dist: u64) -> impl Fn(&u64) -> bool {
-    move |hash: &u64| -> bool { aniki_boss_distance(*hash, Color::Red) == dist }
+pub fn make_target_filter_12(dist: u64) -> impl Fn(&u64) -> bool {
+    move |hash| aniki_boss_distance(*hash, Color::Green) == dist
 }
 
 pub fn make_action_filter_12(dist: u64) -> impl Fn(&Action, &u64) -> bool {
-    move |action: &Action, hash: &u64| -> bool {
+    move |action, hash| {
         if aniki_boss_distance(*hash, Color::Green) != dist {
             return false;
         }

@@ -37,8 +37,8 @@ impl OnOff {
 impl std::ops::Not for OnOff {
     type Output = Self;
     fn not(self) -> Self::Output {
-        let red = 0xaaa;
-        let green = 0x555;
+        let red = 0xaaa << 48;
+        let green = 0x555 << 48;
         Self {
             onoff: ((self.onoff & red) >> 1) | ((self.onoff & green) << 1),
         }

@@ -88,7 +88,7 @@ where
             .num_dir(num_from)
             .join(format!("{num_doves:0>2}.tdl"));
         let dst_dir = factory.backstepped(num_to);
-        core_methods::backstep(src_path, dst_dir, num_doves, num_processes, 300_000_000)?;
+        core_methods::backstep(src_path, dst_dir, num_doves, num_processes, 400_000_000)?;
     }
 
     // --- Redistribute ---
@@ -98,7 +98,10 @@ where
         let src_dir = dove_dir(factory.backstepped(num_to), num_doves);
         let dst_dir = dove_dir(factory.redistributed(num_to), num_doves);
         std::fs::create_dir_all(&dst_dir)?;
-        core_methods::redistribute(src_dir, dst_dir, num_processes)?;
+        core_methods::redistribute(&src_dir, dst_dir, num_processes)?;
+        if del_tmp_files {
+            std::fs::remove_dir_all(src_dir)?;
+        }
     }
     if del_tmp_files {
         std::fs::remove_dir_all(factory.backstepped(num_to))?;
@@ -112,7 +115,10 @@ where
         let dst_dir = dove_dir(factory.trimmed_simply(num_to), num_doves);
         std::fs::create_dir_all(&dst_dir)?;
         let win_paths = factory.win_paths(num_from, num_doves);
-        core_methods::trim_simply(src_dir, dst_dir, win_paths, num_processes)?;
+        core_methods::trim_simply(&src_dir, dst_dir, win_paths, num_processes, 4)?;
+        if del_tmp_files {
+            std::fs::remove_dir_all(src_dir)?;
+        }
     }
 
     if del_tmp_files {
@@ -148,7 +154,7 @@ where
             dst_dir,
             num_doves,
             num_doves,
-            win_paths,
+            &win_paths,
             num_processes,
         )?;
     }
@@ -182,7 +188,7 @@ where
             dst_dir,
             num_doves,
             num_doves + 1,
-            win_paths,
+            &win_paths,
             num_processes,
         )?;
     }
@@ -216,7 +222,7 @@ where
             dst_dir,
             num_doves,
             num_doves - 1,
-            win_paths,
+            &win_paths,
             num_processes,
         )?;
     }
@@ -231,7 +237,7 @@ where
         println!("=== num_doves={num_doves} ===");
         core_methods::gather(
             dove_dir(factory.trimmed_remove(num_to), num_doves),
-            factory.num_dir(num_to),
+            factory.num_dir(num_to).join(format!("{num_doves:0>2}.tdl")),
         )?;
     }
     if del_tmp_files {
@@ -291,8 +297,8 @@ fn advance_one_step(
 }
 
 fn main() -> anyhow::Result<()> {
-    let root = PathBuf::from(r"..");
-    let num_from = 2;
+    let root = PathBuf::from(r"C:\Users\t_ish\Documents\dev\github\TokyoDovesData");
+    let num_from = 3;
     let num_processes = 16;
     advance_one_step(root, num_from, num_processes, false)?;
     Ok(())

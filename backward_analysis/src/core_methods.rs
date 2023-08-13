@@ -9,6 +9,30 @@ use tokyodoves::{analysis::*, collections::*, game::*, *};
 
 use crate::{distributed_path, dove_dir};
 
+const BASE: u64 = 0b10_10_10_10_10_10 << 48;
+const fn mask(shift: usize) -> u64 {
+    0b11 << (shift * 2 + 48)
+}
+
+macro_rules! masked_base_array {
+    ($({ $($num:expr),* }),*) => {
+        [
+            $( BASE $(& !mask($num))* ),*
+        ]
+    };
+}
+
+// {}     => BASE
+// {0}    => BASE & !mask(0)
+// {0, 1} => BASE & !mask(0) & !mask(1)
+const WIN_ONOFFS_10: [u64; 16] = masked_base_array![
+    {}, {0}, {1}, {2}, {3}, {4},
+    {0, 1}, {0, 2}, {0, 3}, {0, 4},
+    {1, 2}, {1, 3}, {1, 4},
+    {2, 3}, {2, 4},
+    {3, 4}
+];
+
 fn load_win_filter<F>(
     win_paths: &[impl AsRef<std::path::Path>],
     filter: F,
@@ -16,13 +40,18 @@ fn load_win_filter<F>(
 where
     F: Fn(&u64) -> bool,
 {
+    println!("Estimating required capacity ...");
     let mut capacity = Capacity::new();
     for path in win_paths.iter() {
         capacity += BoardSet::required_capacity_filter(std::fs::File::open(path)?, &filter);
     }
     let mut set = BoardSet::with_capacity(capacity);
+    println!("Prepared a set with required capacity");
+
     for path in win_paths.iter() {
-        set.load_filter(std::fs::File::open(path)?, &filter)?;
+        println!("Loading win at {:?} ...", path.as_ref());
+        set.load_filter(std::fs::File::open(&path)?, &filter)?;
+        println!("Loaded win at {:?}", path.as_ref());
     }
     Ok(set)
 }
@@ -32,30 +61,36 @@ pub fn trim_simply(
     dst_dir: impl AsRef<std::path::Path>,
     win_paths: Vec<PathBuf>,
     num_processes: usize,
+    parallel_chunk: usize,
 ) -> anyhow::Result<()> {
     let src_dir = Arc::new(src_dir.as_ref().to_owned());
     let dst_dir = Arc::new(dst_dir.as_ref().to_owned());
     let win_paths = Arc::new(win_paths);
 
-    let mut handlers = Vec::new();
-    for i in 0..num_processes {
-        let src_dir = src_dir.clone();
-        let dst_dir = dst_dir.clone();
-        let win_paths = win_paths.clone();
-        handlers.push(std::thread::spawn(move || {
-            println!("[Thread {i}] started");
-            let src_path = distributed_path(src_dir.as_ref(), i);
-            let dst_path = distributed_path(dst_dir.as_ref(), i);
+    for i0 in (0..num_processes).step_by(parallel_chunk) {
+        let mut handlers = Vec::new();
+        for i_add in 0..parallel_chunk {
+            let i = i0 + i_add;
+            let src_dir = src_dir.clone();
+            let dst_dir = dst_dir.clone();
+            let win_paths = win_paths.clone();
+            handlers.push(std::thread::spawn(move || {
+                println!("[Thread {i}] started");
+                let src_path = distributed_path(src_dir.as_ref(), i);
+                let dst_path = distributed_path(dst_dir.as_ref(), i);
 
-            let original = BoardSet::new_from_file(&src_path).expect("new from file error");
-            let trimmed = thin_out_set_no_action(original, win_paths.as_ref()).expect("trim error");
-            trimmed
-                .save(std::fs::File::create(dst_path).expect("create error"))
-                .expect("save error");
-            println!("[Thread {i}] finished");
-        }))
+                let original = BoardSet::new_from_file(&src_path).expect("new from file error");
+                let trimmed =
+                    thin_out_set_no_action(original, win_paths.as_ref()).expect("trim error");
+                trimmed
+                    .save(std::fs::File::create(dst_path).expect("create error"))
+                    .expect("save error");
+                println!("[Thread {i}] finished");
+            }));
+        }
+        handlers.into_iter().for_each(|x| x.join().unwrap());
     }
-    handlers.into_iter().for_each(|x| x.join().unwrap());
+
     Ok(())
 }
 
@@ -77,43 +112,155 @@ pub fn trim_on_action(
     dst_dir: impl AsRef<std::path::Path>,
     num_doves_from: usize,
     num_doves_to: usize,
-    win_paths: Vec<PathBuf>,
+    win_paths: &[impl AsRef<std::path::Path>],
     num_processes: usize,
 ) -> anyhow::Result<()> {
-    let src_dir = Arc::new(src_dir.as_ref().to_owned());
-    let dst_dir = Arc::new(dst_dir.as_ref().to_owned());
-    let win_paths = Arc::new(win_paths);
+    let trimmed_sets = if num_doves_from == num_doves_to {
+        let src_paths: Vec<std::path::PathBuf> = (0..num_processes)
+            .map(|i| distributed_path(src_dir.as_ref(), i))
+            .collect();
+        create_thinned_set(&src_paths, win_paths, num_doves_from)?
+    } else {
+        let originals: Vec<BoardSet> = (0..num_processes)
+            .map(|i| {
+                let src_path = distributed_path(src_dir.as_ref(), i);
+                BoardSet::new_from_file(&src_path).expect("new from file error")
+            })
+            .collect();
+        thin_out_set(originals, win_paths, num_doves_from, num_doves_to)?
+    };
 
-    let mut handlers = Vec::new();
-    for i in 0..num_processes {
-        let src_dir = src_dir.clone();
-        let dst_dir = dst_dir.clone();
-        let win_paths = win_paths.clone();
-        handlers.push(std::thread::spawn(move || {
-            println!("[Thread {i}] started");
-            let src_path = distributed_path(src_dir.as_ref(), i);
-            let dst_path = distributed_path(dst_dir.as_ref(), i);
-
-            let original = BoardSet::new_from_file(&src_path).expect("new from file error");
-            let trimmed = thin_out_set(original, win_paths.as_ref(), num_doves_from, num_doves_to)
-                .expect("trim error");
-            trimmed
-                .save(std::fs::File::create(dst_path).expect("create error"))
-                .expect("save error");
-            println!("[Thread {i}] finished");
-        }))
+    for (i, trimmed) in trimmed_sets.into_iter().enumerate() {
+        let dst_path = distributed_path(dst_dir.as_ref(), i);
+        trimmed.save(std::fs::File::create(dst_path).expect("create error"))?;
     }
-    handlers.into_iter().for_each(|x| x.join().unwrap());
-
     Ok(())
 }
 
+/// Only for Trim Move
+pub fn create_thinned_set(
+    src_paths: &[impl AsRef<std::path::Path>],
+    win_paths: &[impl AsRef<std::path::Path>],
+    num_doves_from_to: usize,
+) -> anyhow::Result<Vec<BoardSet>> {
+    if !(2..=12).contains(&num_doves_from_to) {
+        return Err(anyhow::anyhow!("invalid argument"));
+    }
+
+    fn parallel_run(
+        target: &mut Vec<BoardSet>,
+        src_paths: &[impl AsRef<std::path::Path>],
+        core_process: impl Fn(std::path::PathBuf) -> BoardSet + Send + Sync + 'static,
+    ) {
+        let num_processes = src_paths.len();
+        assert_eq!(target.len(), num_processes);
+
+        let core_process = Arc::new(core_process);
+        let mut handlers = Vec::new();
+        for i in 0..num_processes {
+            let core_process = core_process.clone();
+            let src_path = src_paths[i].as_ref().to_owned();
+            handlers.push(std::thread::spawn(move || {
+                println!("[Thread {i}] start");
+                let result = core_process(src_path);
+                println!("[Thread {i}] finish");
+                result
+            }));
+        }
+        let new_sets = handlers.into_iter().map(|x| x.join().unwrap());
+        for (s, new) in target.iter_mut().zip(new_sets) {
+            s.absorb(new);
+        }
+    }
+
+    let num_processes = src_paths.len();
+    let mut trimmed_sets: Vec<BoardSet> = (0..num_processes).map(|_| BoardSet::new()).collect();
+
+    match num_doves_from_to {
+        2..=8 => {
+            println!("* [{num_doves_from_to} -> {num_doves_from_to}] ...");
+            let wins = load_win_filter(win_paths, |_| true)?;
+
+            parallel_run(&mut trimmed_sets, src_paths, move |src_path| {
+                create_thinned_set_core(src_path, |_| true, |_, _| true, &wins)
+                    .expect("thinning error")
+            });
+        }
+        9 => {
+            for num_doves in 3..=6 {
+                println!("* [9 -> 9] num_doves = {num_doves}");
+                let wins = load_win_filter(win_paths, make_win_filter_9(num_doves))?;
+
+                parallel_run(&mut trimmed_sets, src_paths, move |src_path| {
+                    create_thinned_set_core(
+                        src_path,
+                        make_target_filter_9(num_doves),
+                        make_action_filter_9(10, 10),
+                        &wins,
+                    )
+                    .expect("thinning error")
+                });
+            }
+        }
+        10 => {
+            for win_onoff in WIN_ONOFFS_10.into_iter().map(OnOff::new) {
+                println!("* [10 -> 10] onoff = {win_onoff}");
+                let wins = load_win_filter(win_paths, make_win_filter_10(win_onoff))?;
+
+                parallel_run(&mut trimmed_sets, src_paths, move |src_path| {
+                    create_thinned_set_core(
+                        src_path,
+                        make_target_filter_10(win_onoff),
+                        make_action_filter_10(10, 10),
+                        &wins,
+                    )
+                    .expect("thinning error")
+                });
+            }
+        }
+        11 => {
+            for n in 0..10 {
+                let win_onoff = OnOff::new((0xfff ^ (1 << n)) << 48);
+                println!("* [11 -> 11] onoff = {win_onoff}");
+                let wins = load_win_filter(win_paths, make_win_filter_11(win_onoff))?;
+
+                parallel_run(&mut trimmed_sets, src_paths, move |src_path| {
+                    create_thinned_set_core(
+                        src_path,
+                        make_target_filter_11(win_onoff),
+                        make_action_filter_11(win_onoff),
+                        &wins,
+                    )
+                    .expect("thinning error")
+                });
+            }
+        }
+        12 => {
+            for dist in 1..=6 {
+                println!("* [12 -> 12] dist = {dist}");
+                let wins = load_win_filter(win_paths, make_win_filter_12(dist))?;
+                parallel_run(&mut trimmed_sets, src_paths, move |src_path| {
+                    create_thinned_set_core(
+                        src_path,
+                        make_target_filter_12(dist),
+                        make_action_filter_12(dist),
+                        &wins,
+                    )
+                    .expect("thinning error")
+                });
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(trimmed_sets)
+}
+
 pub fn thin_out_set(
-    target: BoardSet,
+    mut targets: Vec<BoardSet>,
     win_paths: &[impl AsRef<std::path::Path>],
     num_doves_from: usize,
     num_doves_to: usize,
-) -> anyhow::Result<BoardSet> {
+) -> anyhow::Result<Vec<BoardSet>> {
     if !(2..=12).contains(&num_doves_from)
         || !(2..=12).contains(&num_doves_to)
         || num_doves_from.abs_diff(num_doves_to) >= 2
@@ -125,133 +272,148 @@ pub fn thin_out_set(
     let contains_move = num_doves_from == num_doves_to;
     let contains_remove = num_doves_from > num_doves_to;
 
-    if num_doves_to <= 8 {
-        println!("* [{num_doves_to}] ...");
-        return Ok(thin_out_set_core(
-            target,
-            win_paths,
-            |_| true,
-            |_, _| true,
-            |_| true,
-            contains_put,
-            contains_move,
-            contains_remove,
-        )?);
+    fn parallel_run(
+        sets: Vec<BoardSet>,
+        core_process: impl Fn(BoardSet) -> BoardSet + Send + Sync + 'static,
+    ) -> Vec<BoardSet> {
+        let num_processes = sets.len();
+        let core_process = Arc::new(core_process);
+        let mut handlers = Vec::new();
+        for i in 0..num_processes {
+            let core_process = core_process.clone();
+            let set = sets[i].clone();
+            handlers.push(std::thread::spawn(move || {
+                println!("[Thread {i}] start");
+                let result = core_process(set);
+                println!("[Thread {i}] finish");
+                result
+            }));
+        }
+        handlers.into_iter().map(|x| x.join().unwrap()).collect()
     }
-    let mut trimmed = target;
+
     match num_doves_to {
-        9 => {
-            for num_doves in 3..=6 {
-                println!("* [9] num_doves = {num_doves}");
-                trimmed = thin_out_set_core(
-                    trimmed,
-                    win_paths,
-                    make_target_filter_9(num_doves),
-                    make_action_filter_9(num_doves_from, num_doves_to),
-                    make_win_filter_9(num_doves),
+        2..=8 => {
+            println!("* [{num_doves_from} -> {num_doves_to}] ...");
+            let wins = load_win_filter(win_paths, |_| true)?;
+
+            targets = parallel_run(targets, move |mut target| {
+                thin_out_set_core(
+                    &mut target,
+                    |_| true,
+                    |_, _| true,
+                    &wins,
                     contains_put,
                     contains_move,
                     contains_remove,
-                )?;
+                )
+                .unwrap();
+                target
+            });
+        }
+        9 => {
+            for num_doves in 3..=6 {
+                println!("* [{num_doves_from} -> 9] num_doves = {num_doves}");
+                let wins = load_win_filter(win_paths, make_win_filter_9(num_doves))?;
+
+                targets = parallel_run(targets, move |mut target| {
+                    thin_out_set_core(
+                        &mut target,
+                        make_target_filter_9(num_doves),
+                        make_action_filter_9(num_doves_from, num_doves_to),
+                        &wins,
+                        contains_put,
+                        contains_move,
+                        contains_remove,
+                    )
+                    .unwrap();
+                    target
+                });
             }
         }
         10 => {
-            const BASE: u64 = 0b10_10_10_10_10_10 << 48;
-            const fn mask(shift: usize) -> u64 {
-                0b11 << (shift * 2 + 48)
-            }
+            for win_onoff in WIN_ONOFFS_10.into_iter().map(OnOff::new) {
+                println!("* [{num_doves_from} -> 10] onoff = {win_onoff}");
+                let wins = load_win_filter(win_paths, make_win_filter_10(win_onoff))?;
 
-            // {}     => BASE
-            // {0}    => BASE & !mask(0)
-            // {0, 1} => BASE & !mask(0) & !mask(1)
-            macro_rules! masked_base_array {
-                ($({ $($num:expr),* }),*) => {
-                    [
-                        $( BASE $(& !mask($num))* ),*
-                    ]
-                };
-            }
-
-            const WIN_ONOFFS: [u64; 16] = masked_base_array![
-                {}, {0}, {1}, {2}, {3}, {4},
-                {0, 1}, {0, 2}, {0, 3}, {0, 4},
-                {1, 2}, {1, 3}, {1, 4},
-                {2, 3}, {2, 4},
-                {3, 4}
-            ];
-
-            for win_onoff in WIN_ONOFFS.into_iter().map(OnOff::new) {
-                println!("* [10] onoff = {win_onoff}");
-                trimmed = thin_out_set_core(
-                    trimmed,
-                    win_paths,
-                    make_target_filter_10(win_onoff),
-                    make_action_filter_10(num_doves_from, num_doves_to),
-                    make_win_filter_10(win_onoff),
-                    contains_put,
-                    contains_move,
-                    contains_remove,
-                )?;
+                targets = parallel_run(targets, move |mut target| {
+                    thin_out_set_core(
+                        &mut target,
+                        make_target_filter_10(win_onoff),
+                        make_action_filter_10(num_doves_from, num_doves_to),
+                        &wins,
+                        contains_put,
+                        contains_move,
+                        contains_remove,
+                    )
+                    .unwrap();
+                    target
+                });
             }
         }
         11 => {
             for n in 0..10 {
                 let win_onoff = OnOff::new((0xfff ^ (1 << n)) << 48);
-                println!("* [11] onoff = {win_onoff}");
-                trimmed = thin_out_set_core(
-                    trimmed,
-                    win_paths,
-                    make_target_filter_11(win_onoff),
-                    make_action_filter_11(win_onoff),
-                    make_win_filter_11(win_onoff),
-                    contains_put,
-                    contains_move,
-                    contains_remove,
-                )?;
+                println!("* [{num_doves_from} -> 11] onoff = {win_onoff}");
+                let wins = load_win_filter(win_paths, make_win_filter_11(win_onoff))?;
+
+                targets = parallel_run(targets, move |mut target| {
+                    thin_out_set_core(
+                        &mut target,
+                        make_target_filter_11(win_onoff),
+                        make_action_filter_11(win_onoff),
+                        &wins,
+                        contains_put,
+                        contains_move,
+                        contains_remove,
+                    )
+                    .unwrap();
+                    target
+                });
             }
         }
         12 => {
             for dist in 1..=6 {
-                println!("* [12] dist = {dist}");
-                trimmed = thin_out_set_core(
-                    trimmed,
-                    win_paths,
-                    make_target_filter_12(dist),
-                    make_action_filter_12(dist),
-                    make_win_filter_12(dist),
-                    contains_put,
-                    contains_move,
-                    contains_remove,
-                )?;
+                println!("* [{num_doves_from} -> 12] dist = {dist}");
+                let wins = load_win_filter(win_paths, make_win_filter_12(dist))?;
+
+                targets = parallel_run(targets, move |mut target| {
+                    thin_out_set_core(
+                        &mut target,
+                        make_target_filter_12(dist),
+                        make_action_filter_12(dist),
+                        &wins,
+                        contains_put,
+                        contains_move,
+                        contains_remove,
+                    )
+                    .unwrap();
+                    target
+                });
             }
         }
         _ => unreachable!(),
     }
-    Ok(trimmed)
+    Ok(targets)
 }
 
-fn thin_out_set_core<FT, FA, FW>(
-    target: BoardSet,
-    win_paths: &[impl AsRef<std::path::Path>],
+fn thin_out_set_core<FT, FA>(
+    target: &mut BoardSet,
     target_filter: FT,
     action_filter: FA,
-    win_filter: FW,
+    wins: &BoardSet,
     contains_put: bool,
     contains_move: bool,
     contains_remove: bool,
-) -> std::io::Result<BoardSet>
+) -> std::io::Result<()>
 where
     FT: Fn(&u64) -> bool,
     FA: Fn(&Action, &u64) -> bool,
-    FW: Fn(&u64) -> bool,
 {
-    let mut trimmed = BoardSet::with_capacity(target.capacity());
-    let wins = load_win_filter(win_paths, win_filter)?;
-    for h0 in target.into_raw() {
+    let filter = |&h0: &u64| {
         if !target_filter(&h0) {
-            trimmed.raw_mut().insert(h0);
+            return true;
         }
-        let mut is_good_board = true;
         let b0 = BoardBuilder::from_u64(h0).build_unchecked();
         use Color::*;
         for a1 in b0.legal_actions(Red, contains_put, contains_move, contains_remove) {
@@ -260,16 +422,46 @@ where
             }
             let b1 = b0.perform_unchecked_copied(a1);
             if !wins.raw().contains(&b1.to_invariant_u64(Green)) {
-                is_good_board = false;
-                break;
+                return false;
             }
         }
-        if is_good_board {
-            trimmed.raw_mut().insert(h0);
+        true
+    };
+    target.raw_mut().retain(filter);
+    Ok(())
+}
+
+fn create_thinned_set_core<FT, FA>(
+    src_path: impl AsRef<std::path::Path>,
+    target_filter: FT,
+    action_filter: FA,
+    wins: &BoardSet,
+) -> std::io::Result<BoardSet>
+where
+    FT: Fn(&u64) -> bool,
+    FA: Fn(&Action, &u64) -> bool,
+{
+    let filter = |&h0: &u64| {
+        if !target_filter(&h0) {
+            return false;
         }
-    }
-    trimmed.shrink_to_fit();
-    Ok(trimmed)
+        let b0 = BoardBuilder::from_u64(h0).build_unchecked();
+        use Color::*;
+        for a1 in b0.legal_actions(Red, false, true, false) {
+            if !action_filter(&a1, &h0) {
+                continue;
+            }
+            let b1 = b0.perform_unchecked_copied(a1);
+            if !wins.raw().contains(&b1.to_invariant_u64(Green)) {
+                return false;
+            }
+        }
+        true
+    };
+    let mut set = BoardSet::new();
+    set.raw_mut()
+        .load_filter(std::fs::File::open(src_path)?, filter)?;
+    Ok(set)
 }
 
 fn count_doves_in_file(path: impl AsRef<std::path::Path>) -> std::io::Result<usize> {
