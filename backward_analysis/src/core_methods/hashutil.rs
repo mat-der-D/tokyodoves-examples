@@ -12,25 +12,41 @@ impl std::fmt::Display for OnOff {
 }
 
 impl OnOff {
-    pub const FULL: OnOff = OnOff { onoff: 0xfff << 48 };
-
     pub fn new(hash: u64) -> Self {
         Self {
             onoff: hash & (0xfff << 48),
         }
     }
 
-    pub fn project_on(self, color: Color) -> Self {
-        use Color::*;
-        let projected = match color {
-            Red => self.onoff & (0xaaa << 48),
-            Green => self.onoff & (0x555 << 48),
-        };
-        Self { onoff: projected }
-    }
+    // pub fn project_on(self, color: Color) -> Self {
+    //     use Color::*;
+    //     let projected = match color {
+    //         Red => self.onoff & (0xaaa << 48),
+    //         Green => self.onoff & (0x555 << 48),
+    //     };
+    //     Self { onoff: projected }
+    // }
 
-    pub fn count_doves(&self) -> u32 {
-        self.onoff.count_ones()
+    // pub fn count_doves(&self) -> u32 {
+    //     self.onoff.count_ones()
+    // }
+
+    pub fn contains(&self, color: Color, dove: Dove) -> bool {
+        use Color::*;
+        let icolor = match color {
+            Red => 1,
+            Green => 0,
+        };
+        use Dove::*;
+        let idove = match dove {
+            B => 58,
+            A => 56,
+            Y => 54,
+            M => 52,
+            T => 50,
+            H => 48,
+        };
+        self.onoff & (1 << (icolor + idove)) != 0
     }
 }
 
@@ -45,70 +61,64 @@ impl std::ops::Not for OnOff {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PossibleAction {
-    Put(Color, Dove),
-    Move,
-    Remove(Color, Dove),
-}
-
-impl PossibleAction {
-    pub fn matches(&self, action: &Action) -> bool {
-        use PossibleAction::*;
-        match self {
-            Put(color, dove) => {
-                matches!(action, Action::Put(c, d, _) if *c == *color && *d == *dove)
-            }
-            Move => {
-                matches!(action, Action::Move(..))
-            }
-            Remove(color, dove) => {
-                matches!(action, Action::Remove(c, d) if *c == *color && *d == *dove)
-            }
-        }
-    }
-}
-
-pub fn possible_action(from: OnOff, to: OnOff) -> Option<PossibleAction> {
-    use PossibleAction::*;
-    let diff = from.onoff ^ to.onoff;
-    match diff.count_ones() {
-        0 => return Some(Move),
-        1 => (),
-        _ => return None,
-    }
-    let num_zeros = diff.trailing_zeros();
-
+fn coordinate_index(hash: u64, color: Color, dove: Dove) -> u64 {
     use Color::*;
-    let color = match num_zeros % 2 {
-        0 => Green,
-        1 => Red,
-        _ => unreachable!(),
+    let icolor = match color {
+        Red => 4,
+        Green => 0,
     };
-
     use Dove::*;
-    let dove = match num_zeros / 2 {
-        29 => B,
-        28 => A,
-        27 => Y,
-        26 => M,
-        25 => T,
-        24 => H,
-        _ => return None,
+    let idove = match dove {
+        B => 40,
+        A => 32,
+        Y => 24,
+        M => 16,
+        T => 8,
+        H => 0,
     };
+    (hash >> (icolor + idove)) & 0xf
+}
 
-    if from.onoff.count_ones() < to.onoff.count_ones() {
-        Some(Put(color, dove))
+// fn distance_to_boss(hash: u64, color: Color, dove: Dove, boss_h: u64, boss_v: u64) -> u64 {
+//     if !OnOff::new(hash).contains(color, dove) {
+//         0
+//     } else {
+//         let idx = coordinate_index(hash, color, dove);
+//         (idx % 4).abs_diff(boss_h) + (idx / 4).abs_diff(boss_v)
+//     }
+// }
+
+// pub fn distance_a(hash: u64, color: Color) -> u64 {
+//     use Dove::*;
+//     let boss = coordinate_index(hash, color, B);
+//     let (boss_h, boss_v) = (boss % 4, boss / 4);
+//     distance_to_boss(hash, color, A, boss_h, boss_v)
+// }
+
+pub fn distance_a(hash: u64, color: Color) -> u64 {
+    use Dove::*;
+    if !OnOff::new(hash).contains(color, A) {
+        0
     } else {
-        Some(Remove(color, dove))
+        let boss = coordinate_index(hash, color, B);
+        let aniki = coordinate_index(hash, color, A);
+        (boss % 4).abs_diff(aniki % 4) + (boss / 4).abs_diff(aniki / 4)
     }
 }
 
-pub fn aniki_boss_distance(hash: u64, color: Color) -> u64 {
-    use Color::*;
-    let (aniki, boss) = match color {
-        Red => ((hash >> 36) & 0xf, (hash >> 44) & 0xf),
-        Green => ((hash >> 32) & 0xf, (hash >> 40) & 0xf),
-    };
-    (aniki % 4).abs_diff(boss % 4) + (aniki / 4).abs_diff(boss / 4)
-}
+// pub fn distance_ay(hash: u64, color: Color) -> u64 {
+//     use Dove::*;
+//     let boss = coordinate_index(hash, color, B);
+//     let (boss_h, boss_v) = (boss % 4, boss / 4);
+//     distance_to_boss(hash, color, A, boss_h, boss_v)
+//         + distance_to_boss(hash, color, Y, boss_h, boss_v)
+// }
+
+// pub fn distance_aym(hash: u64, color: Color) -> u64 {
+//     use Dove::*;
+//     let boss = coordinate_index(hash, color, B);
+//     let (boss_h, boss_v) = (boss % 4, boss / 4);
+//     distance_to_boss(hash, color, A, boss_h, boss_v)
+//         + distance_to_boss(hash, color, Y, boss_h, boss_v)
+//         + distance_to_boss(hash, color, M, boss_h, boss_v)
+// }

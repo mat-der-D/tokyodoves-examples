@@ -115,7 +115,7 @@ where
         let dst_dir = dove_dir(factory.trimmed_simply(num_to), num_doves);
         std::fs::create_dir_all(&dst_dir)?;
         let win_paths = factory.win_paths(num_from, num_doves);
-        core_methods::trim_simply(&src_dir, dst_dir, win_paths, num_processes, 4)?;
+        core_methods::trim_simply(&src_dir, dst_dir, win_paths, num_processes, num_processes)?;
         if del_tmp_files {
             std::fs::remove_dir_all(src_dir)?;
         }
@@ -132,6 +132,7 @@ fn win_to_lose<P>(
     num_from: usize,
     num_processes: usize,
     del_tmp_files: bool,
+    nums_doves_to_split_win_if_possible: &[usize],
 ) -> anyhow::Result<()>
 where
     P: AsRef<Path>,
@@ -139,33 +140,38 @@ where
     let num_to = num_from + 1;
 
     // x_to_x_common
-    x_to_x_common(factory, num_from, num_processes, del_tmp_files)?;
+    // x_to_x_common(factory, num_from, num_processes, del_tmp_files)?;
 
     // Trim Move
     println!("### PHASE: TRIM MOVE ###");
-    for num_doves in 2..=12 {
-        println!("=== num_doves={num_doves} ===");
-        let src_dir = dove_dir(factory.trimmed_simply(num_to), num_doves);
-        let dst_dir = dove_dir(factory.trimmed_move(num_to), num_doves);
-        std::fs::create_dir_all(&dst_dir)?;
-        let win_paths = factory.win_paths(num_to, num_doves);
-        core_methods::trim_on_action(
-            src_dir,
-            dst_dir,
-            num_doves,
-            num_doves,
-            &win_paths,
-            num_processes,
-        )?;
-    }
-    if del_tmp_files {
-        std::fs::remove_dir_all(factory.trimmed_simply(num_to))?;
-    }
+    // for num_doves in 2..=12 {
+    //     println!("=== num_doves={num_doves} ===");
+    //     let src_dir = dove_dir(factory.trimmed_simply(num_to), num_doves);
+    //     let dst_dir = dove_dir(factory.trimmed_move(num_to), num_doves);
+    //     std::fs::create_dir_all(&dst_dir)?;
+    //     let win_paths = factory.win_paths(num_to, num_doves);
+    //     core_methods::trim_on_action(
+    //         src_dir,
+    //         dst_dir,
+    //         num_doves,
+    //         num_doves,
+    //         &win_paths,
+    //         num_processes,
+    //         nums_doves_to_split_win_if_possible.contains(&num_doves),
+    //     )?;
+    // }
+    // if del_tmp_files {
+    //     std::fs::remove_dir_all(factory.trimmed_simply(num_to))?;
+    // }
 
     // Trim Put
     println!("### PHASE: TRIM PUT ###");
     for num_doves in 2..=12 {
         println!("=== num_doves={num_doves} ===");
+        if num_doves <= 7 {
+            println!("Skipped");
+            continue;
+        }
         let src_dir = dove_dir(factory.trimmed_move(num_to), num_doves);
         let dst_dir = dove_dir(factory.trimmed_put(num_to), num_doves);
         std::fs::create_dir_all(&dst_dir)?;
@@ -190,6 +196,7 @@ where
             num_doves + 1,
             &win_paths,
             num_processes,
+            nums_doves_to_split_win_if_possible.contains(&(num_doves + 1)),
         )?;
     }
     if del_tmp_files {
@@ -224,6 +231,7 @@ where
             num_doves - 1,
             &win_paths,
             num_processes,
+            nums_doves_to_split_win_if_possible.contains(&(num_doves - 1)),
         )?;
     }
     if del_tmp_files {
@@ -282,13 +290,20 @@ fn advance_one_step(
     num_from: usize,
     num_processes: usize,
     del_tmp_files: bool,
+    nums_doves_to_split_win_if_possible: &[usize],
 ) -> anyhow::Result<()> {
     let factory = PathFactory::new(root);
     match num_from {
         0 | 1 => return Err(anyhow::anyhow!("invalid num_from")),
         n => match n % 2 {
             0 => lose_to_win(&factory, num_from, num_processes, del_tmp_files)?,
-            1 => win_to_lose(&factory, num_from, num_processes, del_tmp_files)?,
+            1 => win_to_lose(
+                &factory,
+                num_from,
+                num_processes,
+                del_tmp_files,
+                nums_doves_to_split_win_if_possible,
+            )?,
             _ => unreachable!(),
         },
     }
@@ -296,10 +311,39 @@ fn advance_one_step(
     Ok(())
 }
 
+#[derive(clap::Parser)]
+#[clap(
+    name = "Tokyodoves Backward Analyzer",
+    author = "Smooth Pudding",
+    version = "v0.1.0",
+    about = "Analyze the Tokyodoves Boards"
+)]
+struct Args {
+    #[clap(short = 's', long)]
+    src_dir: Option<String>,
+
+    #[clap(short = 'n', long)]
+    num_doves: usize,
+
+    #[clap(short = 'p', long)]
+    num_processes: usize,
+
+    #[clap(long = "split", num_args = 0..=11)]
+    split_nums_doves: Vec<usize>,
+
+    #[clap(long = "del_tmp_files")]
+    del_tmp_files: Option<bool>,
+}
+
 fn main() -> anyhow::Result<()> {
-    let root = PathBuf::from(r"C:\Users\t_ish\Documents\dev\github\TokyoDovesData");
-    let num_from = 3;
-    let num_processes = 16;
-    advance_one_step(root, num_from, num_processes, false)?;
+    use clap::Parser;
+
+    let arg: Args = Args::parse();
+    let root = PathBuf::from(arg.src_dir.unwrap_or(r"...".to_owned()));
+    let num_from = arg.num_doves;
+    let num_processes = arg.num_processes;
+    let split = arg.split_nums_doves;
+    let del_tmp_files = arg.del_tmp_files.unwrap_or(true);
+    advance_one_step(root, num_from, num_processes, del_tmp_files, &split)?;
     Ok(())
 }

@@ -11,5 +11,6 @@ codegen-units = 1
 
 [dependencies]
 anyhow = "1.0.72"
+clap = { version = "4.3.21", features = ["derive"] }
 # tokyodoves = "0.1.7"
 tokyodoves = { "path" = "C:\\Users\\t_ish\\Documents\\dev\\github\\tokyodoves" }

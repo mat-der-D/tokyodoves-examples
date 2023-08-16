@@ -2,79 +2,72 @@ use super::hashutil::*;
 use tokyodoves::*;
 
 // --- 9 ---
-pub fn make_win_filter_9(num_doves: u32) -> impl Fn(&u64) -> bool {
-    move |hash| OnOff::new(*hash).project_on(Color::Red).count_doves() == num_doves
+// level in 0..3
+pub fn make_win_filter_9(level: u32) -> impl Fn(&u64) -> bool {
+    move |hash| {
+        let mask = 0b1010101010;
+        let num = (hash & mask).count_ones();
+        num % 3 == level
+    }
 }
 
+// level in 0..3
 pub fn make_target_filter_9(num_doves: u32) -> impl Fn(&u64) -> bool {
-    move |hash| OnOff::new(*hash).project_on(Color::Green).count_doves() == num_doves
-}
-
-pub fn make_action_filter_9(num_from: usize, num_to: usize) -> impl Fn(&Action, &u64) -> bool {
-    move |action, _| {
-        use Action::*;
-        match action {
-            Put(..) => num_from < num_to,
-            Move(..) => num_from == num_to,
-            Remove(..) => num_from > num_to,
-        }
+    move |hash| {
+        let mask = 0b0101010101;
+        let num = (hash & mask).count_ones();
+        num % 3 == num_doves
     }
 }
 
 // --- 10 ---
-pub fn make_win_filter_10(win_onoff: OnOff) -> impl Fn(&u64) -> bool {
-    move |hash| OnOff::new(*hash).project_on(Color::Red) == win_onoff
+// level in 0..=3
+pub fn make_win_filter_10(level: u32) -> impl Fn(&u64) -> bool {
+    move |hash| {
+        let mask = 0b1010101010;
+        let masked = (hash >> 48) & mask;
+        let right_aligned = {
+            let mut cursor = 1;
+            let mut masked = masked;
+            let mut aligned = 0;
+            for _ in 0..5 {
+                masked >>= 1;
+                aligned |= masked & cursor;
+                cursor <<= 1;
+            }
+            aligned
+        };
+        (right_aligned.trailing_ones() + 1) / 2 == level
+    }
 }
 
-pub fn make_target_filter_10(win_onoff: OnOff) -> impl Fn(&u64) -> bool {
-    move |hash| OnOff::new(*hash).project_on(Color::Green) == !win_onoff
-}
-
-pub fn make_action_filter_10(num_from: usize, num_to: usize) -> impl Fn(&Action, &u64) -> bool {
-    move |action, _| {
-        use Action::*;
-        match action {
-            Put(..) => num_from > num_to,
-            Move(..) => num_from == num_to,
-            Remove(..) => num_from < num_to,
-        }
+// level in 0..=3
+pub fn make_target_filter_10(level: u32) -> impl Fn(&u64) -> bool {
+    move |hash| {
+        let mask = 0b0101010101;
+        let masked = (hash >> 48) & mask;
+        let right_aligned = {
+            let mut cursor = 1;
+            let mut masked = masked;
+            let mut aligned = 0;
+            for _ in 0..5 {
+                aligned |= masked & cursor;
+                masked >>= 1;
+                cursor <<= 1;
+            }
+            aligned
+        };
+        (right_aligned.trailing_ones() + 1) / 2 == level
     }
 }
 
 // --- 11 ---
-pub fn make_win_filter_11(win_onoff: OnOff) -> impl Fn(&u64) -> bool {
-    move |hash| OnOff::new(*hash) == win_onoff
+// level in 0..4
+pub fn make_win_filter_11(level: u64) -> impl Fn(&u64) -> bool {
+    move |hash| distance_a(*hash, Color::Red) % 4 == level
 }
 
-pub fn make_target_filter_11(win_onoff: OnOff) -> impl Fn(&u64) -> bool {
-    move |hash| OnOff::new(*hash) == !win_onoff
-}
-
-pub fn make_action_filter_11(win_onoff: OnOff) -> impl Fn(&Action, &u64) -> bool {
-    move |action, hash| match possible_action(OnOff::new(*hash), !win_onoff) {
-        Some(pos) => pos.matches(action),
-        None => false,
-    }
-}
-
-// --- 12 ---
-pub fn make_win_filter_12(dist: u64) -> impl Fn(&u64) -> bool {
-    move |hash| aniki_boss_distance(*hash, Color::Red) == dist
-}
-
-pub fn make_target_filter_12(dist: u64) -> impl Fn(&u64) -> bool {
-    move |hash| aniki_boss_distance(*hash, Color::Green) == dist
-}
-
-pub fn make_action_filter_12(dist: u64) -> impl Fn(&Action, &u64) -> bool {
-    move |action, hash| {
-        if aniki_boss_distance(*hash, Color::Green) != dist {
-            return false;
-        }
-        let onoff = OnOff::new(*hash);
-        match possible_action(onoff, OnOff::FULL) {
-            Some(pos) => pos.matches(action),
-            None => false,
-        }
-    }
+// level in 0..4
+pub fn make_target_filter_11(level: u64) -> impl Fn(&u64) -> bool {
+    move |hash| distance_a(*hash, Color::Green) % 4 == level
 }
